@@ -79,7 +79,7 @@ class OpenClipWinVisual(torch.nn.Module):
         visual = self.visual
         #마찬가지로 위의 backbone을 불러온다.
         #hasattr을 통해 vit구조인지 확인한다.
-        if not all(hasattr(visual, name) for name in ["conv1", "cls_token", "positional_embedding", "ln_pre", "transformer", "ln_post"]):
+        if not all(hasattr(visual, name) for name in ["conv1", "class_embedding", "positional_embedding", "ln_pre", "transformer", "ln_post"]):
             raise NotImplementedError("This WinCLIP wrapper needs an open_clip VisionTransformer visual backbone.")
         
         #이미디를 patch token으로 변환한다.
