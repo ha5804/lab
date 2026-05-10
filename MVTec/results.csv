@@ -1,0 +1,16 @@
+category,train_limit,k,auc,top_score
+bottle,50,50,1.0,6.54
+leather,50,50,1.0,8.58
+wood,50,50,1.0,9.51
+zipper,50,50,0.98,7.43
+hazelnut,50,50,0.97,9.49
+pill,50,50,0.92,7.22
+toothbrush,50,50,0.89,6.42
+capsule,50,50,0.87,7.08
+cable,50,50,0.86,7.84
+carpet,50,50,0.84,5.2
+transistor,50,50,0.78,9.66
+metal_nut,50,50,0.72,6.49
+grid,50,50,0.71,7.09
+tile,50,50,0.71,6.76
+screw,50,50,0.6,6.9

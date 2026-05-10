@@ -1,0 +1,13 @@
+category,train_limit,k,auc,top_score
+pipe_fryum,30,50,1.0,7.39
+macaroni2,30,50,1.0,7.43
+pcb1,30,50,1.0,7.1
+chewinggum,30,50,1.0,8.97
+fryum,30,50,0.99,8.3
+pcb3,30,50,0.97,7.61
+cashew,30,50,0.96,6.53
+pcb2,30,50,0.95,7.84
+candle,30,50,0.95,6.39
+macaroni1,30,50,0.84,6.01
+capsules,30,50,0.65,7.11
+pcb4,30,50,0.61,6.42

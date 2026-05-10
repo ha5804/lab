@@ -1,0 +1,8 @@
+CLASS_NAME = 'macaroni2' 
+K = 50
+#patch 저장 갯수
+TRAIN_LIMIT = 30
+TEST_LIMIT = 10
+TEST_LIMIT_PER_CLASS = 3
+TEST_INDEX = 0
+BATCH_SIZE = 1

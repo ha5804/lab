@@ -1,0 +1,63 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment and local secrets
+.env
+.env.*
+*.local
+
+# ML / experiment artifacts
+checkpoints/
+weights/
+runs/
+wandb/
+mlruns/
+outputs/
+artifacts/
+logs/
+*.ckpt
+*.pth
+*.pt
+*.onnx
+
+# Large local datasets
+data/**
+!data/
+!data/**/
+!data/**/LICENSE*
+!data/**/license.txt
+!data/**/readme.txt
+!data/**/*.csv
+!data/**/*.json
+data/
+# Generated result files
+results/
+result/
+*.log
