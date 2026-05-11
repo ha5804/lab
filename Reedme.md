@@ -1,4 +1,0 @@
-## Dataloader
-
-### torchvision.datasets.ImageFolder
-

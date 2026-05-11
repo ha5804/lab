@@ -1,6 +1,7 @@
 from torchvision import models
 #CNN, ResNET .. vision model import
 import open_clip
+
 def get_patchcore_backbone(name = "resnet18"):
     model = models.resnet18(weights = models.ResNet18_Weights.IMAGENET1K_V1)
     model.eval()
@@ -13,4 +14,3 @@ def get_winclip_backbone(name = 'ViT-B-16'):
         name,
         pretrained = 'laion2b_s34b_b88k' 
     )
-    
