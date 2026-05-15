@@ -1,11 +1,10 @@
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader, Subset
-import glob
-import os
+from torchvision import transforms
+from torch.utils.data import DataLoader
+from pathlib import Path
 from PIL import Image
 from utils.corruptions import apply_corruption
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT_DIR = Path(__file__).resolve().parents[1]
 
 class ViSA:
     def __init__(
@@ -27,7 +26,7 @@ class ViSA:
         self.corruption = corruption
         self.severity = severity
         
-        self.dir = os.path.join(ROOT_DIR, "data", "Visa", self.category, "Data", "Images", self.phase)
+        self.dir = ROOT_DIR / "data" / "Visa" / self.category / "Data" / "Images" / self.phase
 
         self.transform = transforms.Compose([
             #the function is compose is a tool that groups multiple executions together
@@ -49,7 +48,7 @@ class ViSA:
         ])
         
 
-        self.image_paths = sorted(glob.glob(os.path.join(self.dir, "*.JPG")))
+        self.image_paths = sorted(Path(self.dir).glob("*.JPG"))
         self.classes = ["Normal", "Anomaly"]
         
         if limit is not None:
@@ -78,3 +77,16 @@ class ViSA:
 
     def get_classes(self):
         return self.classes
+
+    def get_image_path(self, idx):
+        return Path(self.image_paths[idx])
+
+    def get_mask_path(self, idx):
+        if self.phase != "Anomaly":
+            return None
+        image_path = self.get_image_path(idx)
+        mask_path = ROOT_DIR / "data" / "Visa" / self.category / "Data" / "Masks" / "Anomaly" / f"{image_path.stem}.png"
+        return mask_path if mask_path.exists() else None
+
+    def is_anomaly_label(self, label):
+        return int(label) == 1

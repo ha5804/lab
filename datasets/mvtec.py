@@ -1,6 +1,10 @@
+from pathlib import Path
+
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Subset
 from utils.corruptions import apply_corruption
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
 
 class MyData:
     def __init__(
@@ -21,7 +25,7 @@ class MyData:
         self.phase = phase
         self.corruption = corruption
         self.severity = severity
-        self.dir = f"data/MVTec/{self.category}/{self.phase}"
+        self.dir = ROOT_DIR / "data" / "MVTec" / self.category / self.phase
 
         self.transform = transforms.Compose([
             #the function is compose is a tool that groups multiple executions together
@@ -44,7 +48,7 @@ class MyData:
         
 
         image_dataset = datasets.ImageFolder(
-            root=self.dir,
+            root=str(self.dir),
             #read root image
             transform=self.transform
             #apply transform
@@ -85,4 +89,25 @@ class MyData:
 
     def get_classes(self):
         return self.classes
+
+    def _resolve_dataset_index(self, idx):
+        if isinstance(self.dataset, Subset):
+            return self.dataset.indices[idx]
+        return idx
+
+    def get_image_path(self, idx):
+        dataset_idx = self._resolve_dataset_index(idx)
+        return Path(self.dataset.dataset.samples[dataset_idx][0]) if isinstance(self.dataset, Subset) else Path(self.dataset.samples[dataset_idx][0])
+
+    def get_mask_path(self, idx):
+        image_path = self.get_image_path(idx)
+        defect_name = image_path.parent.name
+        if self.phase != "test" or defect_name == "good":
+            return None
+        mask_name = f"{image_path.stem}_mask.png"
+        mask_path = ROOT_DIR / "data" / "MVTec" / self.category / "ground_truth" / defect_name / mask_name
+        return mask_path if mask_path.exists() else None
+
+    def is_anomaly_label(self, label):
+        return self.classes[int(label)] != "good"
         
