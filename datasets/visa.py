@@ -2,6 +2,7 @@ from torchvision import transforms
 from torch.utils.data import DataLoader
 from pathlib import Path
 from PIL import Image
+import random
 from utils.corruptions import apply_corruption
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -20,9 +21,13 @@ class ViSA:
         #each category have many class
         corruption=None,
         severity=0,
+        normal_split=None,
+        normal_train_ratio=0.8,
+        split_seed=0,
     ):
         self.category = category
         self.phase = phase
+        self.normal_split = normal_split
         self.corruption = corruption
         self.severity = severity
         
@@ -49,6 +54,21 @@ class ViSA:
         
 
         self.image_paths = sorted(Path(self.dir).glob("*.JPG"))
+        if self.phase == "Normal" and self.normal_split is not None:
+            if self.normal_split not in {"train", "test"}:
+                raise ValueError("normal_split must be one of: train, test")
+            if not 0.0 < normal_train_ratio < 1.0:
+                raise ValueError("normal_train_ratio must be between 0 and 1")
+
+            image_paths = list(self.image_paths)
+            rng = random.Random(split_seed)
+            rng.shuffle(image_paths)
+            split_index = int(len(image_paths) * normal_train_ratio)
+            if self.normal_split == "train":
+                self.image_paths = sorted(image_paths[:split_index])
+            else:
+                self.image_paths = sorted(image_paths[split_index:])
+
         self.classes = ["Normal", "Anomaly"]
         
         if limit is not None:

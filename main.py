@@ -10,11 +10,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import average_precision_score, roc_auc_score
 
 from datasets.mvtec import MyData
 from datasets.visa import ViSA
 from models.backbone import get_backbone
+from models.adaptclip import AdaptCLIP
 from models.patchcore import PatchCore
 from models.winclip import WinCLIP
 from utils.visualization import save_heatmap
@@ -57,7 +58,7 @@ VISA_CLASSES = [
 def parse_args():
     parser = argparse.ArgumentParser(description="Run anomaly detection experiments for MVTec and ViSA.")
     parser.add_argument("--dataset", choices=["mvtec", "visa", "all"], default="all")
-    parser.add_argument("--model", choices=["patchcore", "winclip"], default="patchcore")
+    parser.add_argument("--model", choices=["patchcore", "winclip", "adaptclip"], default="patchcore")
     parser.add_argument("--classes", nargs="+", default=["all"])
     parser.add_argument("--output-dir", default="results")
     parser.add_argument("--device", default="auto")
@@ -66,9 +67,16 @@ def parse_args():
     parser.add_argument("--k", type=int, default=10000, help="PatchCore memory bank coreset size.")
     parser.add_argument("--backbone", default="resnet18", help="PatchCore backbone: resnet18 or wide_resnet50_2.")
     parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--adaptclip-checkpoint", default=None, help="Optional AdaptCLIP adapter checkpoint path.")
+    parser.add_argument("--no-prompt-query", action="store_true", help="Disable AdaptCLIP prompt-query adapter.")
+    parser.add_argument("--winclip-fusion", choices=["textual", "visual", "textual_visual"], default="textual_visual")
+    parser.add_argument("--winclip-image-score", choices=["max", "mean", "topk_mean"], default="topk_mean")
+    parser.add_argument("--winclip-topk-ratio", type=float, default=0.01)
+    parser.add_argument("--no-winclip-visual-gallery", action="store_true")
     parser.add_argument("--train-limit", type=int, default=None)
     parser.add_argument("--test-limit", type=int, default=None)
     parser.add_argument("--test-limit-per-class", type=int, default=None)
+    parser.add_argument("--visa-normal-train-ratio", type=float, default=0.8)
 
     parser.add_argument("--topk-heatmaps", type=int, default=8)
     parser.add_argument("--save-all-heatmaps", action="store_true")
@@ -108,12 +116,31 @@ def build_model(args, category, device):
     if args.model == "patchcore":
         backbone = get_backbone(args.backbone)
         return PatchCore(backbone, k=args.k, device=device)
-    return WinCLIP(
+    if args.model == "winclip":
+        return WinCLIP(
+            category=category,
+            device=device,
+            batch_size=args.batch_size,
+            use_visual_gallery=not args.no_winclip_visual_gallery,
+            fusion_version=args.winclip_fusion,
+            image_score_mode=args.winclip_image_score,
+            image_score_topk_ratio=args.winclip_topk_ratio,
+        )
+    return AdaptCLIP(
         category=category,
         device=device,
         batch_size=args.batch_size,
-        use_visual_gallery=True,
+        checkpoint_path=args.adaptclip_checkpoint,
+        use_prompt_query=not args.no_prompt_query,
     )
+
+
+def model_backbone_name(args):
+    if args.model == "patchcore":
+        return args.backbone
+    if args.model == "adaptclip":
+        return "ViT-L-14-336"
+    return "ViT-B-16-plus-240"
 
 
 def load_mask(mask_path, image_size):
@@ -135,7 +162,7 @@ def upsample_heatmap(heatmap, image_size):
     ).squeeze()
 
 
-def evaluate_items(model, datasets, out_dir, save_all_heatmaps, topk_heatmaps, compute_pixel_auroc):
+def evaluate_items(model, datasets, out_dir, save_all_heatmaps, topk_heatmaps, compute_pixel_metrics):
     scores = []
     labels = []
     image_rows = []
@@ -164,7 +191,7 @@ def evaluate_items(model, datasets, out_dir, save_all_heatmaps, topk_heatmaps, c
             )
             heatmap_records.append((score_value, dataset, idx, img, int(label), heatmap))
 
-            if compute_pixel_auroc:
+            if compute_pixel_metrics:
                 image_size = tuple(img.shape[-2:])
                 mask = load_mask(mask_path, image_size)
                 resized_heatmap = upsample_heatmap(heatmap, image_size)
@@ -173,11 +200,13 @@ def evaluate_items(model, datasets, out_dir, save_all_heatmaps, topk_heatmaps, c
 
     image_auroc = roc_auc_score(labels, scores) if len(set(labels)) > 1 else float("nan")
     pixel_auroc = float("nan")
-    if compute_pixel_auroc and pixel_targets:
+    pixel_aupr = float("nan")
+    if compute_pixel_metrics and pixel_targets:
         y_true = np.concatenate(pixel_targets)
         y_score = np.concatenate(pixel_scores)
         if len(np.unique(y_true)) > 1:
             pixel_auroc = roc_auc_score(y_true, y_score)
+            pixel_aupr = average_precision_score(y_true, y_score)
 
     heatmap_dir = out_dir / "heatmaps"
     heatmap_dir.mkdir(parents=True, exist_ok=True)
@@ -194,7 +223,7 @@ def evaluate_items(model, datasets, out_dir, save_all_heatmaps, topk_heatmaps, c
         writer.writeheader()
         writer.writerows(image_rows)
 
-    return image_auroc, pixel_auroc, scores, [record[5] for record in heatmap_records]
+    return image_auroc, pixel_auroc, pixel_aupr, scores, [record[5] for record in heatmap_records]
 
 
 def run_mvtec_class(args, category, device, out_dir):
@@ -216,7 +245,7 @@ def run_mvtec_class(args, category, device, out_dir):
 
     model = build_model(args, category, device)
     model.fit(train_data)
-    image_auroc, pixel_auroc, _, _ = evaluate_items(
+    image_auroc, pixel_auroc, pixel_aupr, _, _ = evaluate_items(
         model,
         [test_data],
         out_dir,
@@ -225,13 +254,16 @@ def run_mvtec_class(args, category, device, out_dir):
         not args.no_pixel_auroc,
     )
 
-    return image_auroc, pixel_auroc, len(train_data), len(test_data)
+    return image_auroc, pixel_auroc, pixel_aupr, len(train_data), len(test_data)
 
 
 def run_visa_class(args, category, device, out_dir):
     train_data = ViSA(
         category,
         phase="Normal",
+        normal_split="train",
+        normal_train_ratio=args.visa_normal_train_ratio,
+        split_seed=args.seed,
         batch_size=args.batch_size,
         shuffle=False,
         limit=args.train_limit,
@@ -239,6 +271,9 @@ def run_visa_class(args, category, device, out_dir):
     test_normal = ViSA(
         category,
         phase="Normal",
+        normal_split="test",
+        normal_train_ratio=args.visa_normal_train_ratio,
+        split_seed=args.seed,
         batch_size=args.batch_size,
         shuffle=False,
         limit=args.test_limit,
@@ -253,7 +288,7 @@ def run_visa_class(args, category, device, out_dir):
 
     model = build_model(args, category, device)
     model.fit(train_data)
-    image_auroc, pixel_auroc, _, _ = evaluate_items(
+    image_auroc, pixel_auroc, pixel_aupr, _, _ = evaluate_items(
         model,
         [test_normal, test_anomaly],
         out_dir,
@@ -261,7 +296,7 @@ def run_visa_class(args, category, device, out_dir):
         args.topk_heatmaps,
         not args.no_pixel_auroc,
     )
-    return image_auroc, pixel_auroc, len(train_data), len(test_normal) + len(test_anomaly)
+    return image_auroc, pixel_auroc, pixel_aupr, len(train_data), len(test_normal) + len(test_anomaly)
 
 
 def write_summary(output_dir, rows):
@@ -279,6 +314,10 @@ def write_summary(output_dir, rows):
                 "test_count",
                 "image_auroc",
                 "pixel_auroc",
+                "pixel_aupr",
+                "winclip_fusion",
+                "winclip_image_score",
+                "winclip_topk_ratio",
             ],
         )
         writer.writeheader()
@@ -304,24 +343,33 @@ def main():
             print(f"[{dataset_name}/{category}] start")
 
             if dataset_name == "mvtec":
-                image_auroc, pixel_auroc, train_count, test_count = run_mvtec_class(args, category, device, class_out_dir)
+                image_auroc, pixel_auroc, pixel_aupr, train_count, test_count = run_mvtec_class(args, category, device, class_out_dir)
             else:
-                image_auroc, pixel_auroc, train_count, test_count = run_visa_class(args, category, device, class_out_dir)
+                image_auroc, pixel_auroc, pixel_aupr, train_count, test_count = run_visa_class(args, category, device, class_out_dir)
 
             row = {
                 "dataset": dataset_name,
                 "class": category,
                 "model": args.model,
-                "backbone": args.backbone if args.model == "patchcore" else "ViT-B-16-plus-240",
+                "backbone": model_backbone_name(args),
                 "k": args.k if args.model == "patchcore" else "",
                 "train_count": train_count,
                 "test_count": test_count,
                 "image_auroc": image_auroc,
                 "pixel_auroc": pixel_auroc,
+                "pixel_aupr": pixel_aupr,
+                "winclip_fusion": args.winclip_fusion if args.model == "winclip" else "",
+                "winclip_image_score": args.winclip_image_score if args.model == "winclip" else "",
+                "winclip_topk_ratio": args.winclip_topk_ratio if args.model == "winclip" else "",
             }
             rows.append(row)
             write_summary(output_dir, rows)
-            print(f"[{dataset_name}/{category}] image_auroc={image_auroc:.4f}, pixel_auroc={pixel_auroc:.4f}")
+            print(
+                f"[{dataset_name}/{category}] "
+                f"image_auroc={image_auroc:.4f}, "
+                f"pixel_auroc={pixel_auroc:.4f}, "
+                f"pixel_aupr={pixel_aupr:.4f}"
+            )
 
     summary_path = write_summary(output_dir, rows)
     print(f"summary saved: {summary_path}")

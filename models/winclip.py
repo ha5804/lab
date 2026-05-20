@@ -19,16 +19,16 @@ def _convert_to_rgb(image):
 
 #CLIP Visual encoder 개조
 class OpenClipWinVisual(torch.nn.Module):
-    def __init__(self, visual):
+    def __init__(self, visual, scales=None):
         super().__init__()
         self.visual = visual
+        self.scales = tuple(scales or (2, 3))
         #open_clip 내부 ViT encoder, 원본 CLIP backbone 저장
         self.grid_size = self._get_grid_size()
         #patch grid 크기 계산, 예를들어 224,224에서 16짜리 patch를 쓰는 vit라면
         #grid는 14일것이다. 즉 patch의 영역을 grid로 표시하는것. spatial 정보
-        self.masks = self._build_patch_masks()
         #mask는 multi-sclae 기록용이다. winclip에서는 여러 scale window사용
-        self.scale_begin_indx = [0]
+        self.masks, self.scale_begin_indx = self._build_window_masks()
 
     def _get_grid_size(self):
         #현재 vit가 몇 x 몇 patch grid 가지는지 계산
@@ -58,22 +58,33 @@ class OpenClipWinVisual(torch.nn.Module):
         #위에서 설명하였듯, grid는 결국 patch * grid = image 한 sector
         return (image_h // patch_h, image_w // patch_w)
 
-    def _build_patch_masks(self):
-        #grid가 15,15라고 생각하자. patch갯수는 당연히 15 * 15 일것이다.
-        num_patches = self.grid_size[0] * self.grid_size[1]
-        #torch.eye는 대각성분에 1이되도록한다.
-        #이때 num_patch가 16이므로, 16,16짜리 대각성분 1인 행렬 반환
-        #이때 mask는 또한 각각의 row이다.
-        #따라서 각각의 row에서 mask.bool()을 적용하므로, t,f,f,f,...
-        #t.f,f,f,f,
-        #f,t,f,f,f,f....
-        #와 같은 boolen masking 행렬이 생성된다.
-        #이는 patch-level anomaly를 수행하기 위한 mask이다.
-        return [mask.bool() for mask in torch.eye(num_patches)]
+    def _build_window_masks(self):
+        grid_h, grid_w = self.grid_size
+        window_sizes = [1]
+        for scale in self.scales:
+            scale = int(scale)
+            if scale > 1 and scale <= min(grid_h, grid_w) and scale not in window_sizes:
+                window_sizes.append(scale)
+
+        masks = []
+        scale_begin_indx = []
+        for window_size in window_sizes:
+            scale_begin_indx.append(len(masks))
+            for row in range(grid_h - window_size + 1):
+                for col in range(grid_w - window_size + 1):
+                    mask = torch.zeros(grid_h, grid_w, dtype=torch.bool)
+                    mask[row:row + window_size, col:col + window_size] = True
+                    masks.append(mask.reshape(-1))
+        return masks, scale_begin_indx
 
     def forward(self, image):
         tokens = self.encode_patch_tokens(image)
-        return [tokens[:, patch_index] for patch_index in range(tokens.shape[1])]
+        features = []
+        for mask in self.masks:
+            mask = mask.to(tokens.device)
+            window_feature = tokens[:, mask].mean(dim=1)
+            features.append(window_feature)
+        return features
 
     def encode_patch_tokens(self, image):
         visual = self.visual
@@ -89,7 +100,7 @@ class OpenClipWinVisual(torch.nn.Module):
         grid_h, grid_w = x.shape[-2:]
         if self.grid_size != (grid_h, grid_w):
             self.grid_size = (grid_h, grid_w)
-            self.masks = self._build_patch_masks()
+            self.masks, self.scale_begin_indx = self._build_window_masks()
         #(B,C,H,W)에서 (B,N,D)형태로 flatten
         x = x.reshape(x.shape[0], x.shape[1], -1).permute(0, 2, 1)
         #ViT는 맨앞에 special token, CLS를 추가한다.
@@ -133,10 +144,10 @@ class OpenClipWinVisual(torch.nn.Module):
 
 
 class OpenClipWinModel(torch.nn.Module):
-    def __init__(self, model):
+    def __init__(self, model, scales=None):
         super().__init__()
         self.model = model
-        self.visual = OpenClipWinVisual(model.visual)
+        self.visual = OpenClipWinVisual(model.visual, scales=scales)
 
     def encode_image(self, image):
         return self.visual(image)
@@ -153,14 +164,25 @@ class OpenClipAD:
             pretrained=pretrained,
             precision=precision,
         )
-        return OpenClipWinModel(model), preprocess_train, preprocess_val
+        return OpenClipWinModel(model, scales=scales), preprocess_train, preprocess_val
 
     @staticmethod
     def get_tokenizer(model_name):
         return open_clip.get_tokenizer(model_name)
 
 class WinClipAD(torch.nn.Module):
-    def __init__(self, out_size_h, out_size_w, device, backbone, pretrained_dataset, scales, precision='fp32', **kwargs):
+    def __init__(
+        self,
+        out_size_h,
+        out_size_w,
+        device,
+        backbone,
+        pretrained_dataset,
+        scales,
+        precision='fp32',
+        fusion_version="textual_visual",
+        **kwargs,
+    ):
         '''
 
         :param out_size_h:
@@ -183,7 +205,7 @@ class WinClipAD(torch.nn.Module):
         # version v1:    norm for each of linguistic embedding
         self.version = 'V1' # V1:
         # visual textual, textual_visual
-        self.fusion_version = 'textual_visual'
+        self.fusion_version = fusion_version
 
         self.transform = transforms.Compose([
             transforms.Resize((kwargs['img_resize'], kwargs['img_resize']), Image.BICUBIC),
@@ -225,6 +247,7 @@ class WinClipAD(torch.nn.Module):
             image = image.half()
         image_features = self.model.encode_image(image)
         self.masks = self.model.visual.masks
+        self.scale_begin_indx = self.model.visual.scale_begin_indx
         self.grid_size = self.model.visual.grid_size
         return [f / f.norm(dim=-1, keepdim=True) for f in image_features]
 
@@ -455,6 +478,9 @@ class WinCLIP:
         precision=None,
         use_visual_gallery=True,
         batch_size=1,
+        fusion_version="textual_visual",
+        image_score_mode="topk_mean",
+        image_score_topk_ratio=0.01,
     ):
         self.category = category
         self.device = device
@@ -462,6 +488,8 @@ class WinCLIP:
         self.batch_size = batch_size
         self.img_resize = img_resize
         self.img_cropsize = img_cropsize
+        self.image_score_mode = image_score_mode
+        self.image_score_topk_ratio = image_score_topk_ratio
 
         if precision is None:
             precision = "fp16" if str(device).startswith("cuda") else "fp32"
@@ -474,6 +502,7 @@ class WinCLIP:
             pretrained_dataset=pretrained_dataset,
             scales=list(scales),
             precision=precision,
+            fusion_version=fusion_version,
             img_resize=img_resize,
             img_cropsize=img_cropsize,
         )
@@ -570,7 +599,8 @@ class WinCLIP:
         elif self.model.fusion_version == "textual":
             anomaly_map = textual_anomaly_map
         else:
-            anomaly_map = 1. / (1. / textual_anomaly_map + 1. / visual_anomaly_map)
+            eps = torch.finfo(textual_anomaly_map.dtype).eps
+            anomaly_map = 1. / (1. / textual_anomaly_map.clamp_min(eps) + 1. / visual_anomaly_map.clamp_min(eps))
 
         return F.interpolate(
             anomaly_map,
@@ -579,12 +609,24 @@ class WinCLIP:
             align_corners=False,
         ).squeeze(1)
 
+    def _score_heatmaps(self, heatmaps):
+        flat = heatmaps.flatten(1)
+        if self.image_score_mode == "max":
+            return flat.max(dim=1)[0]
+        if self.image_score_mode == "mean":
+            return flat.mean(dim=1)
+        if self.image_score_mode == "topk_mean":
+            ratio = min(max(float(self.image_score_topk_ratio), 0.0), 1.0)
+            k = max(1, int(flat.shape[1] * ratio))
+            return flat.topk(k, dim=1).values.mean(dim=1)
+        raise ValueError(f"Unknown image_score_mode: {self.image_score_mode}")
+
     def predict(self, img):
         heatmap = self._predict_batch_map(img)[0]
-        score = heatmap.max()
+        score = self._score_heatmaps(heatmap.unsqueeze(0))[0]
         return score, heatmap
 
     def predict_batch(self, imgs):
         heatmaps = self._predict_batch_map(imgs)
-        scores = heatmaps.flatten(1).max(dim=1)[0]
+        scores = self._score_heatmaps(heatmaps)
         return scores, [heatmap for heatmap in heatmaps]

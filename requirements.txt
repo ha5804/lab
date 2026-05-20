@@ -1,8 +1,10 @@
 torch
 torchvision
 open_clip_torch
+huggingface_hub
 Pillow
 numpy
+pandas
 matplotlib
 scikit-learn
 jupyter

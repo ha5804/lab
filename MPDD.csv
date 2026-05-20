@@ -1,0 +1,7 @@
+Shot,Category,I_AUROC,I_AUPR,I_F1max,P_AUROC,P_AUPR,P_F1max
+0-shot,bracket_black,65.8,73.1,77.9,96.4,15.8,26.4
+0-shot,bracket_brown,56.3,72.1,80.3,92.6,2.9,6.7
+0-shot,bracket_white,61.4,54.7,71.4,99.5,4.0,9.1
+0-shot,connector,71.4,53.3,61.9,96.1,14.4,20.5
+0-shot,metal_plate,88.6,94.8,91.8,93.3,60.4,61.5
+0-shot,tubes,97.8,98.9,94.8,97.8,54.6,55.1
