@@ -77,11 +77,36 @@ def parse_args():
     parser.add_argument("--test-limit", type=int, default=None)
     parser.add_argument("--test-limit-per-class", type=int, default=None)
     parser.add_argument("--visa-normal-train-ratio", type=float, default=0.8)
+    parser.add_argument(
+        "--corruption",
+        choices=[
+            "gaussian_noise",
+            "motion_blur",
+            "brightness",
+            "contrast",
+            "jpeg_compression",
+            "downsample_upsample",
+        ],
+        default=None,
+        help="Optional image corruption applied by the dataset transform.",
+    )
+    parser.add_argument(
+        "--severity",
+        type=int,
+        choices=[0, 1, 2, 3],
+        default=0,
+        help="Corruption severity. Use 0 to disable corruption.",
+    )
 
     parser.add_argument("--topk-heatmaps", type=int, default=8)
     parser.add_argument("--save-all-heatmaps", action="store_true")
     parser.add_argument("--no-pixel-auroc", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.corruption is None and args.severity != 0:
+        parser.error("--severity requires --corruption")
+    if args.corruption is not None and args.severity == 0:
+        parser.error("--corruption requires --severity 1, 2, or 3")
+    return args
 
 
 def set_seed(seed):
@@ -233,6 +258,8 @@ def run_mvtec_class(args, category, device, out_dir):
         batch_size=args.batch_size,
         shuffle=False,
         limit=args.train_limit,
+        corruption=args.corruption,
+        severity=args.severity,
     )
     test_data = MyData(
         category,
@@ -241,6 +268,8 @@ def run_mvtec_class(args, category, device, out_dir):
         shuffle=False,
         limit=args.test_limit,
         limit_per_class=args.test_limit_per_class,
+        corruption=args.corruption,
+        severity=args.severity,
     )
 
     model = build_model(args, category, device)
@@ -267,6 +296,8 @@ def run_visa_class(args, category, device, out_dir):
         batch_size=args.batch_size,
         shuffle=False,
         limit=args.train_limit,
+        corruption=args.corruption,
+        severity=args.severity,
     )
     test_normal = ViSA(
         category,
@@ -277,6 +308,8 @@ def run_visa_class(args, category, device, out_dir):
         batch_size=args.batch_size,
         shuffle=False,
         limit=args.test_limit,
+        corruption=args.corruption,
+        severity=args.severity,
     )
     test_anomaly = ViSA(
         category,
@@ -284,6 +317,8 @@ def run_visa_class(args, category, device, out_dir):
         batch_size=args.batch_size,
         shuffle=False,
         limit=args.test_limit,
+        corruption=args.corruption,
+        severity=args.severity,
     )
 
     model = build_model(args, category, device)
@@ -315,6 +350,8 @@ def write_summary(output_dir, rows):
                 "image_auroc",
                 "pixel_auroc",
                 "pixel_aupr",
+                "corruption",
+                "severity",
                 "winclip_fusion",
                 "winclip_image_score",
                 "winclip_topk_ratio",
@@ -358,6 +395,8 @@ def main():
                 "image_auroc": image_auroc,
                 "pixel_auroc": pixel_auroc,
                 "pixel_aupr": pixel_aupr,
+                "corruption": args.corruption or "",
+                "severity": args.severity,
                 "winclip_fusion": args.winclip_fusion if args.model == "winclip" else "",
                 "winclip_image_score": args.winclip_image_score if args.model == "winclip" else "",
                 "winclip_topk_ratio": args.winclip_topk_ratio if args.model == "winclip" else "",
